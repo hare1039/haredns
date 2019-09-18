@@ -6,12 +6,13 @@
 #include <thread>
 #include <iostream>
 #include <vector>
-#include <array>
+#include <set>
 #include <cstdint>
 #include <tuple>
 #include <bitset>
 #include <cstring>
 #include <algorithm>
+#include <unordered_map>
 
 // posix headers
 #include <sys/socket.h>
@@ -201,10 +202,10 @@ struct resource_record
     {
         std::tie(_name, it) = response->readname(it);
 
-        _query_type  = readnet<query_type>(it);
-        _class_type  = readnet<std::uint16_t>(it); // should be IN
-        _TTL         = readnet<std::uint32_t>(it);
-        _rd_size     = readnet<std::uint16_t>(it);
+        _query_type = readnet<query_type>(it);
+        _class_type = readnet<std::uint16_t>(it); // should be IN
+        _TTL        = readnet<std::uint32_t>(it);
+        _rd_size    = readnet<std::uint16_t>(it);
 
         std::copy_n (it, _rd_size, std::back_inserter(_rd_data));
         std::advance(it, _rd_size);
@@ -217,42 +218,46 @@ struct resource_record
         case query_type::A:
         {
             std::uint32_t ip = readnet<std::uint32_t>(_rd_data.begin()); // the IP
-            show_ip(ip);
+            os << ip_to_string(ip);
             break;
         }
         case query_type::NS:
         {
-            os << "NS \n";
+            auto [name, _] = _response->readname(_rd_data.begin());
+            std::cout << name;
             break;
         }
         case query_type::CNAME:
         {
-            os << "CNAME \n";
+            os << "CNAME";
             break;
         }
         default:
-            os << "enum: [" << _query_type << "] Not Impl\n";
+            os << "enum: [" << _query_type << "] Not Impl";
             break;
         }
         return os;
     }
 
-    auto get_ip() const -> std::uint32_t
+    auto rd_data_as_ip() const -> int_ip
     {
         if (_query_type == query_type::A)
             return readnet<std::uint32_t>(_rd_data.begin());
 
-        std::cerr << "Warning: query on get_ip\n";
+        std::cerr << "Warning: query A on rd_data_as_ip\n";
         return 0;
+    }
+
+    auto rd_data_as_hostname() const -> std::string
+    {
+        auto [name, _] = _response->readname(_rd_data.begin());
+        return name;
     }
 };
 
 auto operator << (std::ostream& os, resource_record const & h) -> std::ostream&
 {
-    os << "name: "       << h._name << "\n"
-       << "query_type: " << h._query_type << "\n"
-       << "TTL: "        << h._TTL     << "\n"
-       << "rd_size: "    << h._rd_size  << "\n";
+    os << h._name << "\t\t" << h._query_type << "\t\t" << h._TTL << "\t\t";
     return h.show_rd_data(os);
 }
 
@@ -260,6 +265,12 @@ auto resolve(std::string host, query_type query, std::string dnsserver) -> std::
 {
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
     defer _run_1 {[&s]() { close(s); }};
+    timeval tv {
+        .tv_sec  = 5 /* second */,
+        .tv_usec = 0,
+    };
+    setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
+
     sockaddr_in addr {
         .sin_family = AF_INET,
         .sin_port   = htons(53),
@@ -268,30 +279,27 @@ auto resolve(std::string host, query_type query, std::string dnsserver) -> std::
 
     {
         dns d;
-        d.set(1, dns::control_code::RD);
+//        d.set(1, dns::control_code::RD);
         d.set_query(host, query);
         std::vector<std::uint8_t> p {d.create_packet()};
-        std::cout << d._header << "\n";
+//        std::cout << d._header << "\n";
 
-        std::cout << "sending \n";
         if (sendto(s, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
             perror("sendto failed: ");
     }
-
 
     std::shared_ptr<dns> response {nullptr};
     {
         std::vector<std::uint8_t> buf(65536);
         socklen_t len = sizeof addr;
 
-        std::cout << "recving \n";
         if (recvfrom(s, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
             perror("recvfrom failed: ");
 
         // parsing dns packet
         response = std::make_shared<dns>(buf);
     }
-    std::cout << response->_header << "\n";
+    std::cout << response->_header;
 
     // read 1 question
     auto [question_hostname, it] = response->readname(response->_body.begin());
@@ -316,24 +324,70 @@ auto resolve(std::string host, query_type query, std::string dnsserver) -> std::
     return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional));
 }
 
-int main(int argc, char *argv[])
-{
-    std::string dns_server = "199.249.119.1";
-    for (;;)
-    {
-        std::cout << "querying on " << dns_server << "\n";
-        auto&& [ans, auth, addi] = resolve("ip.hare1039.nctu.me", query_type::A, dns_server /*root_dns.front()*/);
 
-        std::cout << "[[answer]]\n";
+// This function will return -> std::vector<int_ip>, ok
+auto recursive_resolve(std::string host,
+                       query_type query,
+                       std::set<int_ip> const & dnsservers,
+                       std::unordered_map<std::string, std::set<int_ip>>& dns_cache)
+    -> std::pair<std::set<int_ip>, bool>
+{
+    if (auto it = dns_cache.find(host); it != dns_cache.end())
+        return {it->second, true};
+
+    for (int_ip dns_server : dnsservers)
+    {
+        std::cout << "Query [" << host << "] @" << ip_to_string(dns_server) << "\n";
+        auto&& [ans, auth, addi] = resolve(host, query, ip_to_string(dns_server));
+
+        for (resource_record & rr: addi)
+        {
+            std::cout << "[[addi]] " << rr << "\n";
+            if (rr._query_type == query_type::A)
+                dns_cache[rr._name].insert(rr.rd_data_as_ip());
+        }
+
+        for (resource_record & rr: auth)
+            std::cout << "[[auth]] " << rr << "\n";
+
         if (not ans.empty())
         {
-            for (auto && v: ans)
-                std::cout << v << "\n";
-            break;
+            std::set<int_ip> rep;
+            for (resource_record & rr: ans)
+            {
+                std::cout << "[[ansr]] " << rr << "\n";
+                if (rr._query_type == query_type::A)
+                    rep.insert(rr.rd_data_as_ip());
+            }
+
+            return {rep, true};
         }
         else
         {
-            dns_server = addi.front().get_ip();
+            for (resource_record & rr: auth)
+            {
+                auto && [next_dns_server, _] = recursive_resolve(rr.rd_data_as_hostname(),
+                                                                 query_type::A,
+                                                                 root_dns,
+                                                                 dns_cache);
+                if (auto && [ans, fin] = recursive_resolve(host, query, next_dns_server, dns_cache); fin)
+                    return {ans, fin};
+            }
         }
     }
+    return {{}, false};
+}
+
+int main(int argc, char *argv[])
+{
+    std::unordered_map<std::string, std::set<int_ip>> dns_cache;
+//    recursive_resolve("ip.hare1039.nctu.me", query_type::A, root_dns, dns_cache);
+    recursive_resolve("people.cs.nctu.edu.tw", query_type::A, root_dns, dns_cache);
+
+//    for (auto && [i, j] : dns_cache)
+//    {
+//        std::cout << i << "\n";
+//        for (auto && k : j)
+//            std::cout << "    -> " << ip_to_string(k) << "\n";
+//    }
 }

@@ -1,6 +1,8 @@
 #ifndef HAREDNS_DEF_HPP_
 #define HAREDNS_DEF_HPP_
 
+using int_ip = std::uint32_t;
+
 enum class query_type : uint16_t
 {
     A     = 1,
@@ -16,7 +18,7 @@ enum class query_type : uint16_t
     DS    = 43,
     RRSIG = 46,
     NSEC  = 47,
-    DNSKEY = 48,
+    DNSKEY= 48,
     NSEC3 = 50,
     OPT   = 41,
     IXFR  = 251,
@@ -25,28 +27,28 @@ enum class query_type : uint16_t
     CAA   = 257
 };
 
-std::array<char const *, 13> const root_dns =
+std::set<int_ip> const root_dns =
 {{
-    "198.41.0.4",     // a.root-servers.net
-    "199.9.14.201",   // b.root-servers.net
-    "192.33.4.12",    // c.root-servers.net
-    "199.7.91.13",    // d.root-servers.net
-    "192.203.230.10", // e.root-servers.net
-    "192.5.5.241",    // f.root-servers.net
-    "192.112.36.4",   // g.root-servers.net
-    "198.97.190.53",  // h.root-servers.net
-    "192.36.148.17",  // i.root-servers.net
-    "192.58.128.30",  // j.root-servers.net
-    "193.0.14.129",   // k.root-servers.net
-    "199.7.83.42",    // l.root-servers.net
-    "202.12.27.33",   // m.root-servers.net
+    3324575748, // "198.41.0.4",     // a.root-servers.net
+    3339259593, // "199.9.14.201",   // b.root-servers.net
+    3223389196, // "192.33.4.12",    // c.root-servers.net
+    3339148045, // "199.7.91.13",    // d.root-servers.net
+    3234588170, // "192.203.230.10", // e.root-servers.net
+    3221554673, // "192.5.5.241",    // f.root-servers.net
+    3228574724, // "192.112.36.4",   // g.root-servers.net
+    3328294453, // "198.97.190.53",  // h.root-servers.net
+    3223622673, // "192.36.148.17",  // i.root-servers.net
+    3225059358, // "192.58.128.30",  // j.root-servers.net
+    3238006401, // "193.0.14.129",   // k.root-servers.net
+    3339146026, // "199.7.83.42",    // l.root-servers.net
+    3389791009, // "202.12.27.33",   // m.root-servers.net
 }};
 
-void show_ip(std::uint32_t ip)
+auto ip_to_string(int_ip ip) -> std::string
 {
     sockaddr_in a;
     a.sin_addr.s_addr = htonl(ip);
-    std::cout << inet_ntoa(a.sin_addr) << "\n";
+    return inet_ntoa(a.sin_addr);
 }
 
 template<typename IntegerType>
