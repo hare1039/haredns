@@ -9,6 +9,9 @@
 #include <array>
 #include <cstdint>
 #include <tuple>
+#include <bitset>
+#include <cstring>
+#include <algorithm>
 
 // posix headers
 #include <sys/socket.h>
