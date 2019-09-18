@@ -8,11 +8,13 @@
 #include <vector>
 #include <array>
 #include <cstdint>
+#include <tuple>
 
 // posix headers
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <unistd.h>
 
 // project headers
 #include "haredns_def.hpp"
@@ -129,30 +131,43 @@ struct dns
         return buf;
     }
 
-    template<typename Iterator> static
-    auto readname(Iterator it) -> std::pair<std::string, Iterator>
-    {
-        static_assert(sizeof (*it) == 1); // expect std::uint8_t
-
-        std::string hostname;
-        for (;;)
-        {
-            std::uint8_t size = *it;
-            std::copy_n(std::next(it), size, std::back_inserter(hostname));
-            std::advance(it, size + 1);
-            if (size == 0)
-                break;
-            hostname.push_back('.');
-        }
-        return {hostname, it};
-    }
-
     auto readptrname(std::size_t raw_offset) const -> std::string
     {
         auto it = _body.begin();
         std::advance(it, (raw_offset - sizeof(_header)));
         auto [name, _] = readname(it);
         return name;
+    }
+
+    template<typename Iterator>
+    auto readname(Iterator it) const -> std::pair<std::string, Iterator>
+    {
+        static_assert(sizeof (*it) == 1); // expect std::uint8_t
+
+        // has compression label
+        if (*it & 0b11000000)
+        {
+            std::uint16_t name_ptr = readnet<std::uint16_t>(it);
+            std::uint16_t offset   = name_ptr & 0b0011'1111'11111111;
+            return {readptrname(offset), it};
+        }
+        else if (*it == 0)
+        {
+            return {"", std::next(it)};
+        }
+        else
+        {
+            using namespace std::literals;
+            std::string hostname, follow;
+            std::uint8_t size = *it;
+
+            std::copy_n(std::next(it), size, std::back_inserter(hostname));
+            std::advance(it, size + 1);
+            std::tie(follow, it) = readname(it);
+
+            hostname.append("."s + follow);
+            return {hostname, it};
+        }
     }
 };
 
@@ -167,42 +182,6 @@ auto operator << (std::ostream& os, dns::header const & h) -> std::ostream&
     return os;
 }
 
-template<typename IntegerType>
-auto ntoh(IntegerType data) -> IntegerType
-{
-    if constexpr (sizeof(IntegerType) == sizeof(std::uint16_t))
-        return ntohs(data);
-    else
-        return ntohl(data);
-}
-
-template<typename IntegerType, typename Iterator>
-auto readnet(Iterator & it) -> IntegerType
-{
-    IntegerType data;
-    std::memcpy(&data, std::addressof(*it), sizeof(IntegerType));
-    std::advance(it, sizeof(IntegerType));
-
-    if constexpr (std::is_enum_v<IntegerType>)
-        return static_cast<IntegerType>(ntoh(static_cast<std::underlying_type_t<IntegerType>>(data)));
-    else
-        return ntoh(data);
-}
-
-template<typename IntegerType, typename Iterator> inline
-auto readnet(Iterator && it) -> IntegerType
-{
-    Iterator i = it;
-    return readnet<IntegerType>(i);
-}
-
-void show_ip(std::uint32_t ip)
-{
-    sockaddr_in a;
-    a.sin_addr.s_addr = htonl(ip);
-    std::cout << inet_ntoa(a.sin_addr) << "\n";
-}
-
 struct resource_record
 {
     std::string   _name;
@@ -211,35 +190,25 @@ struct resource_record
     std::uint32_t _TTL;
     std::uint16_t _rd_size;
     std::vector<std::uint8_t> _rd_data;
+    std::shared_ptr<dns> _response;
 
     template<typename Iterator,
              std::enable_if_t<is_iterator_v<Iterator>, int> =0>
-    resource_record(Iterator & it, dns const & response)
+    resource_record(Iterator & it, std::shared_ptr<dns> response): _response{response}
     {
-        // has compression label
-        if (*it & 0b11000000)
-        {
-            std::uint16_t name_ptr = readnet<std::uint16_t>(it);
-            std::uint16_t offset   = name_ptr & 0b0011'1111'11111111;
-            _name = response.readptrname(offset);
-        }
-        else
-            std::tie(_name, it) = dns::readname(it);
+        std::tie(_name, it) = response->readname(it);
 
         _query_type  = readnet<query_type>(it);
         _class_type  = readnet<std::uint16_t>(it); // should be IN
         _TTL         = readnet<std::uint32_t>(it);
         _rd_size     = readnet<std::uint16_t>(it);
 
-        std::cout << _name << " " << _query_type << " ";
-//                  << "query_type: " <<  << "\n"
-//                  << "class_type: "<< _class_type << "\n"
-//                  << "TTL: " << _TTL << "\n"
-//                  << "rd_size: " << _rd_size << "\n";
-
         std::copy_n (it, _rd_size, std::back_inserter(_rd_data));
         std::advance(it, _rd_size);
+    }
 
+    auto show_rd_data(std::ostream & os = std::cout) const -> std::ostream&
+    {
         switch(_query_type)
         {
         case query_type::A:
@@ -248,91 +217,120 @@ struct resource_record
             show_ip(ip);
             break;
         }
+        case query_type::NS:
+        {
+            os << "NS \n";
+            break;
+        }
         case query_type::CNAME:
         {
-            std::cout << "CNAME \n";
+            os << "CNAME \n";
             break;
         }
         default:
-            std::cout << "enum: [" << _query_type << "] Not Impl\n";
+            os << "enum: [" << _query_type << "] Not Impl\n";
             break;
         }
+        return os;
+    }
+
+    auto get_ip() const -> std::uint32_t
+    {
+        if (_query_type == query_type::A)
+            return readnet<std::uint32_t>(_rd_data.begin());
+
+        std::cerr << "Warning: query on get_ip\n";
+        return 0;
     }
 };
 
 auto operator << (std::ostream& os, resource_record const & h) -> std::ostream&
 {
-    os << "class_type: " << h._class_type << "\n"
+    os << "name: "       << h._name << "\n"
+       << "query_type: " << h._query_type << "\n"
        << "TTL: "        << h._TTL     << "\n"
        << "rd_size: "    << h._rd_size  << "\n";
-    return os;
+    return h.show_rd_data(os);
 }
 
-void resolve(std::string host, query_type query, std::string dnsserver)
+auto resolve(std::string host, query_type query, std::string dnsserver) -> std::tuple<std::vector<resource_record>, std::vector<resource_record>, std::vector<resource_record>>
 {
     int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
+    defer _run_1 {[&s]() { close(s); }};
     sockaddr_in addr {
         .sin_family = AF_INET,
         .sin_port   = htons(53),
         .sin_addr.s_addr = inet_addr(dnsserver.c_str())
     };
 
-    dns d;
-    d.set(1, dns::control_code::RD);
-    d.set_query(host, query);
-    std::vector<std::uint8_t> p {d.create_packet()};
-    std::cout << d._header << "\n";
+    {
+        dns d;
+        d.set(1, dns::control_code::RD);
+        d.set_query(host, query);
+        std::vector<std::uint8_t> p {d.create_packet()};
+        std::cout << d._header << "\n";
 
-    std::cout << "sending \n";
-    if (sendto(s, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
-        std::cerr << "sendto failed\n";
+        std::cout << "sending \n";
+        if (sendto(s, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
+            perror("sendto failed: ");
+    }
 
-    std::vector<std::uint8_t> buf(65536);
-    socklen_t len = sizeof addr;
 
-    std::cout << "recving \n";
-    if (recvfrom(s, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
-        std::cerr << "recvfrom failed\n";
+    std::shared_ptr<dns> response {nullptr};
+    {
+        std::vector<std::uint8_t> buf(65536);
+        socklen_t len = sizeof addr;
 
-    // parsing dns packet
-    dns response {buf};
-    std::cout << response._header;
+        std::cout << "recving \n";
+        if (recvfrom(s, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
+            perror("recvfrom failed: ");
+
+        // parsing dns packet
+        response = std::make_shared<dns>(buf);
+    }
+    std::cout << response->_header << "\n";
 
     // read 1 question
-    auto [question_hostname, it] = dns::readname(response._body.begin());
+    auto [question_hostname, it] = response->readname(response->_body.begin());
     readnet<std::uint16_t>(it); // query_type
     readnet<std::uint16_t>(it); // class
 
-    // read answer
+    // read answers
     std::vector<resource_record> answers;
-    for (int i = 0; i < response._header._answer; i++)
+    for (int i = 0; i < response->_header._answer; i++)
         answers.emplace_back(it, response);
 
     // read authorities
     std::vector<resource_record> authorities;
-    for (int i = 0; i < response._header._authority; i++)
+    for (int i = 0; i < response->_header._authority; i++)
         authorities.emplace_back(it, response);
 
-    // read additional
+    // read additionals
     std::vector<resource_record> additional;
-    for (int i = 0; i < response._header._additional; i++)
+    for (int i = 0; i < response->_header._additional; i++)
         additional.emplace_back(it, response);
 
-//    int count = 0;
-//    for (; it != response._body.end(); ++it)
-//    {
-//        std::uint8_t v = *it;
-//        std::cout << v << "\t" << static_cast<unsigned int>(v) << "\n";
-//        if (v == 0)
-//            count++;
-//        else
-//            count = 0;
-//        if (count >= 10)
-//            break;
-//    }
+    return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional));
 }
 
 int main(int argc, char *argv[])
 {
-    resolve("host.ip.hare1039.nctu.me", query_type::A, "8.8.8.8");
+    std::string dns_server = "199.249.119.1";
+    for (;;)
+    {
+        std::cout << "querying on " << dns_server << "\n";
+        auto&& [ans, auth, addi] = resolve("ip.hare1039.nctu.me", query_type::A, dns_server /*root_dns.front()*/);
+
+        std::cout << "[[answer]]\n";
+        if (not ans.empty())
+        {
+            for (auto && v: ans)
+                std::cout << v << "\n";
+            break;
+        }
+        else
+        {
+            dns_server = addi.front().get_ip();
+        }
+    }
 }
