@@ -27,6 +27,23 @@ enum class query_type : uint16_t
     CAA   = 257
 };
 
+enum class error_type
+{
+    noerror = 0,
+    formerr = 1,
+    servfail= 2,
+    nxdomain= 3,
+    notimp  = 4,
+    refused = 5,
+    yxdomain= 6,
+    xrrset  = 7,
+    notauth = 8,
+    notzone = 9,
+    plainerror, // non standard error
+};
+
+
+
 std::set<int_ip> const root_dns =
 {{
     3324575748, // "198.41.0.4",     // a.root-servers.net
@@ -114,5 +131,7 @@ struct defer
     defer(Callable && c): _callable{std::forward<Callable>(c)} {}
     ~defer() { std::invoke(_callable); }
 };
+
+constexpr bool is_big_endian() { return htonl(47) == 47; }
 
 #endif // HAREDNS_DEF_HPP_
