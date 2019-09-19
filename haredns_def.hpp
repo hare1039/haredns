@@ -27,7 +27,7 @@ enum class query_type : uint16_t
     CAA   = 257
 };
 
-enum class error_type
+enum class error_type : std::uint32_t
 {
     noerror = 0,
     formerr = 1,
@@ -39,10 +39,17 @@ enum class error_type
     xrrset  = 7,
     notauth = 8,
     notzone = 9,
-    plainerror, // non standard error
+    deadly_timeout = 1 << 20, // non standard error
+    plain          = 1 << 30, // non standard recoverable error
+    timeout,
 };
 
-
+bool is_deadly(error_type e)
+{
+    if (e == error_type::noerror or e >= error_type::plain)
+        return false;
+    return true;
+}
 
 std::set<int_ip> const root_dns =
 {{

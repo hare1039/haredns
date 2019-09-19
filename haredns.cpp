@@ -303,7 +303,7 @@ auto resolve(std::string host, query_type query, int_ip dnsserver) -> std::tuple
         if (sendto(s, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
         {
             perror("sendto failed: ");
-            return {{}, {}, {}, error_type::plainerror};
+            return {{}, {}, {}, error_type::plain};
         }
     }
 
@@ -315,7 +315,7 @@ auto resolve(std::string host, query_type query, int_ip dnsserver) -> std::tuple
         if (recvfrom(s, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
         {
             perror("recvfrom failed: ");
-            return {{}, {}, {}, error_type::plainerror};
+            return {{}, {}, {}, error_type::timeout};
         }
 
         // parsing dns packet
@@ -350,25 +350,30 @@ auto resolve(std::string host, query_type query, int_ip dnsserver) -> std::tuple
     return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional), error_type::noerror);
 }
 
-
 // This function will return -> std::vector<int_ip>, ok
 auto recursive_resolve(std::string host,
                        query_type query,
-                       std::set<int_ip> const & dnsservers,
+                       std::set<int_ip> const & dns_servers,
                        std::unordered_map<std::string, std::set<int_ip>>& dns_cache)
     -> std::pair<std::set<int_ip>, error_type>
 {
+    if (host.back() != '.')
+        host += '.';
+
     if (auto it = dns_cache.find(host); it != dns_cache.end())
         return {it->second, error_type::noerror};
 
-    for (int_ip dns_server : dnsservers)
+    for (int_ip dns_server : dns_servers)
     {
         std::cout << "Query [" << host << "] @" << ip_to_string(dns_server) << "\n";
         auto&& [ans, auth, addi, error] = resolve(host, query, dns_server);
-        if (error == error_type::nxdomain)
-            break;
+        if (is_deadly(error))
+            return {{}, error};
         else if (error != error_type::noerror)
             continue;
+
+        for (resource_record & rr: auth)
+            std::cout << "[[auth]] " << rr << "\n";
 
         for (resource_record & rr: addi)
         {
@@ -376,9 +381,6 @@ auto recursive_resolve(std::string host,
             if (rr._query_type == query_type::A)
                 dns_cache[rr._name].insert(rr.rd_data_as_ip());
         }
-
-        for (resource_record & rr: auth)
-            std::cout << "[[auth]] " << rr << "\n";
 
         if (not ans.empty())
         {
@@ -396,14 +398,16 @@ auto recursive_resolve(std::string host,
         {
             for (resource_record & rr: auth)
             {
-                auto && [next_dns_server, _] = recursive_resolve(rr.rd_data_as_hostname(),
-                                                                     query_type::A,
-                                                                     root_dns,
-                                                                     dns_cache);
+                auto && [next_dns_server, derror] = recursive_resolve(rr.rd_data_as_hostname(),
+                                                                      query_type::A,
+                                                                      root_dns,
+                                                                      dns_cache);
+                if (is_deadly(error))
+                    return {{}, derror};
 
                 auto && [ans, error] = recursive_resolve(host, query, next_dns_server, dns_cache);
-                if (error == error_type::nxdomain)
-                    break;
+                if (is_deadly(error))
+                    return {{}, error};
                 else if (error != error_type::noerror)
                     continue;
                 else
@@ -411,14 +415,16 @@ auto recursive_resolve(std::string host,
             }
         }
     }
-    return {{}, error_type::plainerror};
+    return {{}, error_type::deadly_timeout};
 }
 
 int main(int argc, char *argv[])
 {
     std::unordered_map<std::string, std::set<int_ip>> dns_cache;
-//    recursive_resolve("ip.hare1039.nctu.me", query_type::A, root_dns, dns_cache);
-    recursive_resolve("x.people.cs.nctu.edu.tw", query_type::A, root_dns, dns_cache);
+    auto && [_, err] = recursive_resolve(argv[1], query_type::A, root_dns, dns_cache);
+    if (err != error_type::noerror)
+        std::cout << "Error occurred: dns error code: " << err << "\n";
+//    recursive_resolve("x.people.cs.nctu.edu.tw", query_type::A, root_dns, dns_cache);
 
 //    for (auto && [i, j] : dns_cache)
 //    {
