@@ -39,12 +39,12 @@ enum class error_type : std::uint32_t
     xrrset  = 7,
     notauth = 8,
     notzone = 9,
-    deadly_timeout = 1 << 20, // non standard error
-    plain          = 1 << 30, // non standard recoverable error
+    fatal_timeout = 1 << 20, // non standard fatal error
+    plain         = 1 << 30, // non standard recoverable error
     timeout,
 };
 
-bool is_deadly(error_type e)
+bool is_fatal(error_type e)
 {
     if (e == error_type::noerror or e >= error_type::plain)
         return false;
