@@ -1,9 +1,14 @@
 // protocol: http://www-inf.int-evry.fr/~hennequi/CoursDNS/NOTES-COURS_eng/msg.html
 // ref:      https://mislove.org/teaching/cs4700/spring11/handouts/project1-primer.pdf
-// RFC:      https://www.ietf.org/rfc/rfc1035.txt
+// DNS:      https://www.ietf.org/rfc/rfc1035.txt
 // Name Compression: http://www.keyboardbanger.com/dns-message-format-name-compression/
+// EDNS(0):  https://tools.ietf.org/html/rfc6891
+// DNSSEC:   https://tools.ietf.org/html/rfc3225
+// DS:       https://tools.ietf.org/html/rfc4034
 
 #include <thread>
+#include <iterator>
+#include <memory>
 #include <iostream>
 #include <iomanip>
 #include <vector>
@@ -84,13 +89,13 @@ struct dns
     }
 
 
-    template<typename ... other_codes>
-    void set(int val, control_code const & cc, other_codes && ... codes)
+    template<typename ... OtherCodes>
+    void set(int val, control_code const & cc, OtherCodes && ... codes)
     {
         _header._control |= val << (16 - static_cast<std::uint16_t>(cc));
 
-        if constexpr (sizeof...(other_codes) > 0)
-            set(val, std::forward<other_codes...>(codes...));
+        if constexpr (sizeof...(OtherCodes) > 0)
+            set(val, std::forward<OtherCodes>(codes)...);
     }
 
     void set_query(std::string const & host, query_type qt)
@@ -104,11 +109,34 @@ struct dns
 
         std::uint8_t * end = _body.data() + size;
         std::uint16_t query_val = htons(static_cast<std::uint16_t>(qt));
-        std::memcpy(end, &query_val, sizeof(std::uint16_t));
+        std::memcpy(end, &query_val, sizeof query_val);
 
-        end += sizeof(std::uint16_t);
+        end += sizeof query_val;
         std::uint16_t in_addr = htons(static_cast<std::uint16_t>(1 /* IN */));
-        std::memcpy(end, &in_addr, sizeof(std::uint16_t));
+        std::memcpy(end, &in_addr, sizeof in_addr);
+
+        // EDNS(0) and OPT pseudo-RR
+        _header._additional = 1;
+        size = _body.size();
+        _body.insert(_body.end(), { 0,          // NAME  -> ROOT
+                                    0, 0,       // TYPE  -> quert_type::OPT
+                                    0, 0,       // CLASS -> sender's UDP payload size
+                                    0, 0, 0, 0, // TTL   -> extended RCODE and flags
+                                    0, 0 });    // RDLEN -> describes RDATA
+        end = _body.data() + size + 1;
+
+        std::uint16_t opt = htons(static_cast<std::uint16_t>(query_type::OPT));
+        std::memcpy(end, &opt, sizeof opt);
+        end += sizeof opt;
+
+        std::uint16_t udp_size = htons(MAX_UDP_PAYLOAD_SIZE);
+        std::memcpy(end, &udp_size, sizeof udp_size);
+        end += sizeof udp_size;
+
+        // set 'extended RCODE and flags'. DO bit is on the first bit of 3rd bytes
+        // see https://tools.ietf.org/html/rfc6891#section-6.1.3
+        end += 2;
+        *end = 1 << 7;
     }
 
     auto create_packet() -> std::vector<std::uint8_t>
@@ -266,6 +294,55 @@ struct resource_record
             os << mailname;
             break;
         }
+        case query_type::OPT:
+        {
+            os << "exRCODE & flags: " << std::bitset<32>(_TTL);
+            break;
+        }
+        case query_type::RRSIG:
+        {
+            auto it      = _rd_data.begin();
+            auto covered = readnet<query_type>(it);
+            auto algo    = readnet<dnssec_algorithm>(it);
+            auto labels  = readnet<std::uint8_t> (it);
+            auto oTTL    = readnet<std::uint32_t>(it);
+
+            auto sig_exp = readnet<std::uint32_t>(it);
+            auto sig_inc = readnet<std::uint32_t>(it);
+            auto key_tag = readnet<std::uint16_t>(it);
+
+            std::string signer_name;
+            std::tie(signer_name, it) = _response->readname(it);
+
+            os << static_cast<int>(covered) << " "
+               << (int)algo << " "
+               << std::bitset<8>(labels)  << " "
+               << oTTL << " "
+               << sig_exp << " "
+               << sig_inc << " "
+               << key_tag << " "
+               << signer_name << "\n";
+            std::vector<std::uint8_t> sig;
+            std::copy(it, _rd_data.end(), std::back_inserter(sig));
+//            std::copy(it, _rd_data.end(), std::ostream_iterator<std::uint8_t>(os));
+            break;
+        }
+        case query_type::DNSKEY:
+        {
+            // https://tools.ietf.org/html/rfc4034#section-2.1
+            auto it       = _rd_data.begin();
+            auto flags    = readnet<std::uint16_t>(it);
+            auto protocal = readnet<std::uint8_t>(it); // must be 3
+            auto algo     = readnet<dnssec_algorithm>(it);
+
+            os << "flags:    " << std::bitset<16>(flags) << "\n"
+               << "protocal: " << protocal << "\n"
+               << "algo:     " << algo << "\n";
+            for (; it != _rd_data.end(); ++it)
+                os << *it;
+
+            break;
+        }
         default:
             os << "enum: [" << _query_type << "] Not Impl";
             break;
@@ -273,7 +350,7 @@ struct resource_record
         return os;
     }
 
-    auto rd_data_as_ip() const -> int_ip
+    auto rd_data_as_ip() const -> ipv4
     {
         if (_query_type == query_type::A)
             return readnet<std::uint32_t>(_rd_data.begin());
@@ -297,10 +374,10 @@ auto operator << (std::ostream& os, resource_record const & h) -> std::ostream&
 
 class dns_resolver
 {
-    std::unordered_map<std::string, std::set<int_ip>> _dns_cache;
+    std::unordered_map<std::string, std::set<ipv4>> _dns_cache;
 public:
     static
-    auto resolve(std::string host, query_type query, int_ip dnsserver)
+    auto resolve(std::string host, query_type query, ipv4 dnsserver)
         -> std::tuple<std::vector<resource_record>, std::vector<resource_record>, std::vector<resource_record>, error_type>
     {
         int s = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP);
@@ -311,16 +388,16 @@ public:
         };
         setsockopt(s, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof tv);
 
-        sockaddr_in addr {
-            .sin_family = AF_INET,
-            .sin_port   = htons(53),
-            .sin_addr.s_addr = htonl(dnsserver)
-        };
+        sockaddr_in addr{}; // for g++ convention. wait until c++20. No nested designated initialization yet.
+        addr.sin_family = AF_INET;
+        addr.sin_port   = htons(53);
+        addr.sin_addr.s_addr = htonl(dnsserver);
 
         {
             dns d;
             d.set_query(host, query);
-            d.set(1, dns::control_code::AD);
+            d.set(1, dns::control_code::AD, dns::control_code::CD, dns::control_code::RD);
+            std::cout << d._header << "\n";
             std::vector<std::uint8_t> p {d.create_packet()};
 
             if (sendto(s, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
@@ -332,7 +409,7 @@ public:
 
         std::shared_ptr<dns> response {nullptr};
         {
-            std::vector<std::uint8_t> buf(65536);
+            std::vector<std::uint8_t> buf(MAX_UDP_PAYLOAD_SIZE);
             socklen_t len = sizeof addr;
 
             if (recvfrom(s, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
@@ -348,6 +425,7 @@ public:
                 std::cout << response->_header;
                 return {{}, {}, {}, response->_header.get_error_code()};
             }
+            std::cout << response->_header << "\n";
         }
 
         // read questions
@@ -374,14 +452,24 @@ public:
         for (int i = 0; i < response->_header._additional; i++)
             additional.emplace_back(it, response);
 
+
+        for (resource_record & rr: answers)
+            std::cout << "[[log ansr]] " << rr << "\n";
+
+        for (resource_record & rr: authorities)
+            std::cout << "[[log auth]] " << rr << "\n";
+
+        for (resource_record & rr: additional)
+            std::cout << "[[log addi]] " << rr << "\n";
+
         return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional), error_type::noerror);
     }
 
-    // This function will return -> std::vector<int_ip>, ok
+    // This function will return -> std::vector<ipv4>, ok
     auto recursive_resolve(std::string host,
                            query_type query,
-                           std::set<int_ip> const & dns_servers = root_dns)
-        -> std::pair<std::set<int_ip>, error_type>
+                           std::set<ipv4> const & dns_servers = root_dns)
+        -> std::pair<std::set<ipv4>, error_type>
     {
         if (host.back() != '.')
             host += '.';
@@ -389,7 +477,7 @@ public:
         if (auto it = _dns_cache.find(host); it != _dns_cache.end())
             return {it->second, error_type::noerror};
 
-        for (int_ip dns_server : dns_servers)
+        for (ipv4 dns_server : dns_servers)
         {
             std::cout << "Query [" << host << "] @" << ip_to_string(dns_server) << "\n";
             auto&& [ans, auth, addi, error] = resolve(host, query, dns_server);
@@ -413,15 +501,12 @@ public:
             }
 
             for (resource_record & rr: addi)
-            {
-                //               std::cout << "[[addi]] " << rr << "\n";
                 if (rr._query_type == query_type::A)
                     _dns_cache[rr._name].insert(rr.rd_data_as_ip());
-            }
 
             if (not ans.empty())
             {
-                std::set<int_ip> rep;
+                std::set<ipv4> rep;
                 for (resource_record & rr: ans)
                 {
                     std::cout << "[[ansr]] " << rr << "\n";
@@ -434,23 +519,26 @@ public:
             {
                 for (resource_record & rr: auth)
                 {
+                    std::cout << "using dns: " << rr.rd_data_as_hostname() << " [";
                     auto && [next_dns_server, derror] =
                         recursive_resolve(rr.rd_data_as_hostname(), query_type::A);
 
-                    if (is_fatal(error))
+                    if (is_fatal(derror))
                         return {{}, derror};
+
+                    for (ipv4 ip : next_dns_server)
+                        std::cout << " " << ip_to_string(ip);
+                    std::cout << " ]\n";
 
                     auto && [ans, error] = recursive_resolve(host, query, next_dns_server);
                     if (is_fatal(error))
                         return {{}, error};
-                    else if (error != error_type::noerror)
-                        continue;
-                    else
+                    else if (error == error_type::noerror)
                         return {ans, error};
                 }
             }
         }
-        return {{}, error_type::fatal_timeout};
+        return {{}, error_type::plain};
     }
 };
 

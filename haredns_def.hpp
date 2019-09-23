@@ -1,9 +1,11 @@
 #ifndef HAREDNS_DEF_HPP_
 #define HAREDNS_DEF_HPP_
 
-using int_ip = std::uint32_t;
+using ipv4 = std::uint32_t;
+constexpr std::uint16_t MAX_UDP_PAYLOAD_SIZE = 4096;
 
-enum class query_type : uint16_t
+
+enum class query_type : std::uint16_t
 {
     A     = 1,
     NS    = 2,
@@ -15,12 +17,12 @@ enum class query_type : uint16_t
     AAAA  = 28,
     SRV   = 33,
     NAPTR = 35,
+    OPT   = 41,
     DS    = 43,
     RRSIG = 46,
     NSEC  = 47,
     DNSKEY= 48,
     NSEC3 = 50,
-    OPT   = 41,
     IXFR  = 251,
     AXFR  = 252,
     ANY   = 255,
@@ -44,6 +46,21 @@ enum class error_type : std::uint32_t
     timeout,
 };
 
+// https://tools.ietf.org/html/rfc4034#appendix-A.1
+enum class dnssec_algorithm : std::uint8_t
+{
+    Reserved   = 0,
+    RSAMD5     = 1, // https://tools.ietf.org/html/rfc2537 [NOT RECOMMENDED]
+    DH         = 2, // https://tools.ietf.org/html/rfc2539
+    DSA        = 3, // https://tools.ietf.org/html/rfc2536 [OPTIONAL]
+    ECC        = 4, // TBA
+    RSASHA1    = 5, // https://tools.ietf.org/html/rfc3110 [MANDATORY]
+    Indirect   = 252,
+    PRIVATEDNS = 253,
+    PRIVATEOID = 254,
+    RESERVED   = 255
+};
+
 bool is_fatal(error_type e)
 {
     if (e == error_type::noerror or e >= error_type::plain)
@@ -51,7 +68,7 @@ bool is_fatal(error_type e)
     return true;
 }
 
-std::set<int_ip> const root_dns =
+std::set<ipv4> const root_dns =
 {{
     3324575748, // "198.41.0.4",     // a.root-servers.net
     3339259593, // "199.9.14.201",   // b.root-servers.net
@@ -68,7 +85,7 @@ std::set<int_ip> const root_dns =
     3389791009, // "202.12.27.33",   // m.root-servers.net
 }};
 
-auto ip_to_string(int_ip ip) -> std::string
+auto ip_to_string(ipv4 ip) -> std::string
 {
     sockaddr_in a;
     a.sin_addr.s_addr = htonl(ip);
@@ -78,7 +95,13 @@ auto ip_to_string(int_ip ip) -> std::string
 template<typename IntegerType>
 auto ntoh(IntegerType data) -> IntegerType
 {
-    if constexpr (sizeof(IntegerType) == sizeof(std::uint16_t))
+    static_assert(sizeof(IntegerType) == sizeof(std::uint8_t) or
+                  sizeof(IntegerType) == sizeof(std::uint16_t) or
+                  sizeof(IntegerType) == sizeof(std::uint32_t));
+
+    if constexpr (sizeof(IntegerType) == sizeof(std::uint8_t))
+        return data;
+    else if constexpr (sizeof(IntegerType) == sizeof(std::uint16_t))
         return ntohs(data);
     else
         return ntohl(data);
