@@ -19,6 +19,7 @@
 #include <cstring>
 #include <algorithm>
 #include <unordered_map>
+#include <chrono>
 
 // posix headers
 #include <sys/socket.h>
@@ -28,7 +29,6 @@
 
 // project headers
 #include "haredns_def.hpp"
-#include "haredns_sec.hpp"
 
 struct dns
 {
@@ -412,12 +412,11 @@ public:
             dns d;
             d.set_query(host, query);
             d.set(1, dns::control_code::AD, dns::control_code::CD, dns::control_code::RD);
-            std::cout << d._header << "\n";
             std::vector<std::uint8_t> p {d.create_packet()};
 
             if (sendto(_socket_fd, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
             {
-                perror("sendto failed: ");
+                perror("sendto failed");
                 return {{}, {}, {}, error_type::plain};
             }
         }
@@ -429,7 +428,7 @@ public:
 
             if (recvfrom(_socket_fd, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
             {
-                perror("recvfrom failed: ");
+                perror("recvfrom failed");
                 return {{}, {}, {}, error_type::timeout};
             }
 
@@ -440,7 +439,6 @@ public:
                 std::cout << response->_header;
                 return {{}, {}, {}, response->_header.get_error_code()};
             }
-            std::cout << response->_header << "\n";
         }
 
         // read questions
@@ -467,16 +465,6 @@ public:
         for (int i = 0; i < response->_header._additional; i++)
             additional.emplace_back(it, response);
 
-
-        for (resource_record & rr: answers)
-            std::cout << "[[log ansr]] " << rr << "\n";
-
-        for (resource_record & rr: authorities)
-            std::cout << "[[log auth]] " << rr << "\n";
-
-        for (resource_record & rr: additional)
-            std::cout << "[[log addi]] " << rr << "\n";
-
         return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional), error_type::noerror);
     }
 
@@ -494,7 +482,6 @@ public:
 
         for (ipv4 dns_server : dns_servers)
         {
-            std::cout << "Query [" << host << "] @" << ip_to_string(dns_server) << "\n";
             auto&& [ans, auth, addi, error] = resolve(host, query, dns_server);
             if (is_fatal(error))
                 return {{}, error};
@@ -534,16 +521,11 @@ public:
             {
                 for (resource_record & rr: auth)
                 {
-                    std::cout << "using dns: " << rr.rd_data_as_hostname() << " [";
                     auto && [next_dns_server, derror] =
                         recursive_resolve(rr.rd_data_as_hostname(), query_type::A);
 
                     if (is_fatal(derror))
                         return {{}, derror};
-
-                    for (ipv4 ip : next_dns_server)
-                        std::cout << " " << ip_to_string(ip);
-                    std::cout << " ]\n";
 
                     auto && [ans, error] = recursive_resolve(host, query, next_dns_server);
                     if (is_fatal(error))
@@ -559,8 +541,17 @@ public:
 
 int main(int argc, char *argv[])
 {
+    if (argc < 2)
+    {
+        std::cerr << "argc not enough\n";
+        return 0;
+    }
+    std::cout << "[[qury]] " << argv[1] << "\t" << argv[2] << "\n";
     dns_resolver resolver;
-    auto && [_, err] = resolver.recursive_resolve(argv[1], query_type::A);
+    auto timer = [st = std::chrono::steady_clock::now()] { return std::chrono::steady_clock::now() - st; };
+    auto && [_, err] = resolver.recursive_resolve(argv[1], get_query_type(argv[2]));
     if (err != error_type::noerror)
         std::cout << "Error occurred: dns error code: " << err << "\n";
+
+    std::cout << "Query time: " << std::chrono::duration_cast<std::chrono::milliseconds>(timer()).count() << " ms\n";
 }

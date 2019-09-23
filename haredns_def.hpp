@@ -1,9 +1,22 @@
 #ifndef HAREDNS_DEF_HPP_
 #define HAREDNS_DEF_HPP_
 
+#include <type_traits>
+#include <iterator>
+#include <iostream>
+#include <iomanip>
+#include <set>
+#include <cstdint>
+#include <cstring>
+
+// posix headers
+#include <sys/socket.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <unistd.h>
+
 using ipv4 = std::uint32_t;
 constexpr std::uint16_t MAX_UDP_PAYLOAD_SIZE = 4096;
-
 
 enum class query_type : std::uint16_t
 {
@@ -29,6 +42,18 @@ enum class query_type : std::uint16_t
     CAA   = 257
 };
 
+auto get_query_type(std::string const & q) -> query_type
+{
+    if (q == "A")     return query_type::A;
+    if (q == "NS")    return query_type::NS;
+    if (q == "CNAME") return query_type::CNAME;
+    if (q == "SOA")   return query_type::SOA;
+    if (q == "MX")    return query_type::MX;
+    if (q == "TXT")   return query_type::TXT;
+    if (q == "RRSIG") return query_type::RRSIG;
+    return query_type::ANY;
+}
+
 enum class error_type : std::uint32_t
 {
     noerror = 0,
@@ -49,12 +74,14 @@ enum class error_type : std::uint32_t
 // https://tools.ietf.org/html/rfc4034#appendix-A.1
 enum class dnssec_algorithm : std::uint8_t
 {
-    Reserved   = 0,
+    DeleteDS   = 0,
     RSAMD5     = 1, // https://tools.ietf.org/html/rfc2537 [NOT RECOMMENDED]
     DH         = 2, // https://tools.ietf.org/html/rfc2539
     DSA        = 3, // https://tools.ietf.org/html/rfc2536 [OPTIONAL]
     ECC        = 4, // TBA
     RSASHA1    = 5, // https://tools.ietf.org/html/rfc3110 [MANDATORY]
+    RSASHA1_NSEC3_SHA1 = 7, // https://www.iana.org/assignments/dns-sec-alg-numbers/dns-sec-alg-numbers.xml
+    RSASHA256  = 8,         // https://tools.ietf.org/html/rfc5702
     Indirect   = 252,
     PRIVATEDNS = 253,
     PRIVATEOID = 254,
@@ -127,6 +154,14 @@ auto readnet(Iterator && it) -> IntegerType
     return readnet<IntegerType>(i);
 }
 
+// only for enum -> int promotion
+template<typename Enum,
+         std::enable_if_t<std::is_enum_v<Enum>, int> = 0>
+int  operator+(Enum const& e)
+{
+    return static_cast<std::underlying_type_t<Enum>>(e);
+}
+
 template<typename T, typename = void>
 struct is_iterator
 {
@@ -146,7 +181,7 @@ constexpr bool is_iterator_v = is_iterator<T>::value;
 
 template<typename Enum,
          std::enable_if_t<std::is_enum_v<Enum>, int> = 0>
-std::ostream& operator << (std::ostream& os, Enum e)
+auto operator << (std::ostream& os, Enum e) -> std::ostream&
 {
     return os << static_cast<std::underlying_type_t<Enum>>(e);
 }
