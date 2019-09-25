@@ -345,12 +345,12 @@ struct resource_record
             auto protocal = readnet<std::uint8_t>(it); // must be 3
             auto algo     = readnet<dnssec_algorithm>(it);
 
-            os << "flags:    " << std::bitset<16>(flags) << "\n"
-               << "protocal: " << protocal << "\n"
-               << "algo:     " << algo << "\n";
-            for (; it != _rd_data.end(); ++it)
-                os << *it;
-
+            os << std::bitset<16>(flags) << " "
+               << +protocal << " "
+               << +algo << " ";
+            std::vector<std::uint8_t> pubkey;
+            std::copy(it, _rd_data.end(), std::back_inserter(pubkey));
+            os << "size: " << std::distance(it, _rd_data.end()) << " ";
             break;
         }
         default:
@@ -528,6 +528,9 @@ public:
                     if (rr._query_type == query_type::A)
                         rep.insert(rr.rd_data_as_ip());
                 }
+
+                auto&& [ans, auth, addi, error] = resolve(host, query_type::DNSKEY, dns_server);
+
                 return {rep, error_type::noerror};
             }
             else

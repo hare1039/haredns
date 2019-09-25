@@ -2,30 +2,35 @@
 #define HAREDNS_SEC_HPP_
 
 #include <openssl/evp.h>
+#include <openssl/rsa.h>
+#include <openssl/bn.h>
 #include "haredns_def.hpp"
 
-auto shahash(std::vector<std::uint8_t> const & data, EVP_MD const * md) -> std::vector<std::uint8_t>
+bool verify(std::vector<std::uint8_t> &n, std::vector<std::uint8_t> &e,
+            std::vector<std::uint8_t> &msg, std::vector<std::uint8_t> &hash)
 {
-    // OpenSSL 1.0.2s  28 May 2019
-    EVP_MD_CTX* context = EVP_MD_CTX_create();
-    if (not context)
-        std::cerr << "context create error \n";
-    defer _run_1 {[context] { EVP_MD_CTX_destroy(context); }};
+    RSA *rsa = RSA_new();
+    defer _run_1 = [rsa] { RSA_free(rsa); };
+    RSA_set0_key(rsa,
+                 BN_bin2bn(n.data(), n.size(), nullptr),
+                 BN_bin2bn(e.data(), e.size(), nullptr),
+                 nullptr);
 
-    if (not EVP_DigestInit_ex(context, md, nullptr))
-        std::cerr << "EVP_DigestInit_ex error \n";
+    EVP_PKEY *pk = EVP_PKEY_new();
+    defer _run_2 = [pk] { EVP_PKEY_free(pk); };
 
-    if (not EVP_DigestUpdate(context, data.data(), data.size()))
-        std::cerr << "EVP_DigestUpdate error \n";
+    EVP_PKEY_assign_RSA(pk, rsa);
 
-    std::vector<std::uint8_t> hash(EVP_MAX_MD_SIZE);
-    unsigned int hash_length = 0;
-    if (not EVP_DigestFinal_ex(context, hash.data(), &hash_length))
-        std::cerr << "EVP_DigestFinal_ex error \n";
+    EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(pk, nullptr);
+    defer _run_3 = [ctx]{ EVP_PKEY_CTX_free(ctx); };
 
-    hash.erase(std::next(hash.begin(), hash_length), hash.end());
+    EVP_MD_CTX verify;
+    EVP_MD_CTX_init(&verify);
 
-    return hash;
+    EVP_DigestVerifyInit(&verify, nullptr, EVP_sha256(), nullptr, pk);
+    EVP_DigestVerifyUpdate(&verify, msg.data(), msg.size());
+    return EVP_DigestVerifyFinal(&verify, hash.data(), hash.size());
 }
+
 
 #endif // HAREDNS_SEC_HPP_
