@@ -262,7 +262,8 @@ struct resource_record
         }
         case query_type::CNAME:
         {
-            os << "CNAME";
+			auto [name, _] = _response->readname(_rd_data.begin());
+            os << name;
             break;
         }
         case query_type::AAAA:
@@ -401,12 +402,13 @@ public:
     ~dns_resolver() { close(_socket_fd); }
 
     auto resolve(std::string host, query_type query, ipv4 dnsserver)
-        -> std::tuple<std::vector<resource_record>, std::vector<resource_record>, std::vector<resource_record>, error_type>
+        -> std::tuple<std::vector<resource_record>, std::vector<resource_record>, std::vector<resource_record>, std::size_t, error_type>
     {
         sockaddr_in addr{}; // for g++ convention. wait until c++20. No nested designated initialization yet.
         addr.sin_family = AF_INET;
         addr.sin_port   = htons(53);
         addr.sin_addr.s_addr = htonl(dnsserver);
+		std::size_t size = 0;
 
         {
             dns d;
@@ -417,7 +419,7 @@ public:
             if (sendto(_socket_fd, p.data(), p.size(), 0, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) < 0)
             {
                 perror("sendto failed");
-                return {{}, {}, {}, error_type::plain};
+                return {{}, {}, {}, 0, error_type::plain};
             }
         }
 
@@ -426,10 +428,10 @@ public:
             std::vector<std::uint8_t> buf(MAX_UDP_PAYLOAD_SIZE);
             socklen_t len = sizeof addr;
 
-            if (recvfrom(_socket_fd, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len) < 0)
+            if (size = recvfrom(_socket_fd, buf.data(), buf.size(), 0, reinterpret_cast<sockaddr*>(&addr), &len); size < 0)
             {
                 perror("recvfrom failed");
-                return {{}, {}, {}, error_type::timeout};
+                return {{}, {}, {}, 0, error_type::timeout};
             }
 
             // parsing dns packet
@@ -437,7 +439,7 @@ public:
             if (not response->ok())
             {
                 std::cout << response->_header;
-                return {{}, {}, {}, response->_header.get_error_code()};
+                return {{}, {}, {}, 0, response->_header.get_error_code()};
             }
         }
 
@@ -465,26 +467,26 @@ public:
         for (int i = 0; i < response->_header._additional; i++)
             additional.emplace_back(it, response);
 
-        return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional), error_type::noerror);
+        return std::make_tuple(std::move(answers), std::move(authorities), std::move(additional), size, error_type::noerror);
     }
 
     // This function will return -> std::set<ipv4>, error_type
     auto recursive_resolve(std::string host,
                            query_type query,
                            std::set<ipv4> const & dns_servers = root_dns)
-        -> std::pair<std::set<ipv4>, error_type>
+        -> std::tuple<std::set<ipv4>, std::size_t, error_type>
     {
         if (host.back() != '.')
             host += '.';
 
         if (auto it = _dns_cache.find(host); it != _dns_cache.end())
-            return {it->second, error_type::noerror};
+            return {it->second, 0, error_type::noerror};
 
         for (ipv4 dns_server : dns_servers)
         {
-            auto&& [ans, auth, addi, error] = resolve(host, query, dns_server);
+            auto&& [ans, auth, addi, size, error] = resolve(host, query, dns_server);
             if (is_fatal(error))
-                return {{}, error};
+                return {{}, 0, error};
             else if (error != error_type::noerror)
                 continue;
 
@@ -499,7 +501,7 @@ public:
                     }
                 }
                 if (is_final)
-                    return {{}, error_type::noerror};
+                    return {{}, 0, error_type::noerror};
             }
 
             for (resource_record & rr: addi)
@@ -514,28 +516,31 @@ public:
                     std::cout << "[[ansr]] " << rr << "\n";
                     if (rr._query_type == query_type::A)
                         rep.insert(rr.rd_data_as_ip());
+					if (rr._query_type == query_type::CNAME)
+						recursive_resolve(rr.rd_data_as_hostname(), query);
                 }
-                return {rep, error_type::noerror};
+				
+                return {rep, size, error_type::noerror};
             }
             else
             {
                 for (resource_record & rr: auth)
                 {
-                    auto && [next_dns_server, derror] =
+                    auto && [next_dns_server, _, derror] =
                         recursive_resolve(rr.rd_data_as_hostname(), query_type::A);
 
                     if (is_fatal(derror))
-                        return {{}, derror};
+                        return {{}, 0, derror};
 
-                    auto && [ans, error] = recursive_resolve(host, query, next_dns_server);
+                    auto && [ans, size, error] = recursive_resolve(host, query, next_dns_server);
                     if (is_fatal(error))
-                        return {{}, error};
+                        return {{}, 0, error};
                     else if (error == error_type::noerror)
-                        return {ans, error};
+                        return {ans, size, error};
                 }
             }
         }
-        return {{}, error_type::plain};
+        return {{}, 0, error_type::plain};
     }
 };
 
@@ -549,9 +554,12 @@ int main(int argc, char *argv[])
     std::cout << "[[qury]] " << argv[1] << "\t" << argv[2] << "\n";
     dns_resolver resolver;
     auto timer = [st = std::chrono::steady_clock::now()] { return std::chrono::steady_clock::now() - st; };
-    auto && [_, err] = resolver.recursive_resolve(argv[1], get_query_type(argv[2]));
+    auto && [_, size, err] = resolver.recursive_resolve(argv[1], get_query_type(argv[2]));
     if (err != error_type::noerror)
         std::cout << "Error occurred: dns error code: " << err << "\n";
 
     std::cout << "Query time: " << std::chrono::duration_cast<std::chrono::milliseconds>(timer()).count() << " ms\n";
+	std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
+	std::cout << "Now:  " << std::put_time(std::localtime(&now), "%c %Z") << "\n";
+	std::cout << "Size: " << size << " bytes\n";
 }
