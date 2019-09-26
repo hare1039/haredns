@@ -28,7 +28,7 @@
 
 // project headers
 #include "haredns_def.hpp"
-#include "haredns_sec.hpp"
+//#include "haredns_sec.hpp"
 
 struct dns
 {
@@ -348,9 +348,18 @@ struct resource_record
             os << std::bitset<16>(flags) << " "
                << +protocal << " "
                << +algo << " ";
-            std::vector<std::uint8_t> pubkey;
-            std::copy(it, _rd_data.end(), std::back_inserter(pubkey));
-            os << "size: " << std::distance(it, _rd_data.end()) << " ";
+            std::vector<std::uint8_t> exponent, modulus;
+            std::uint16_t length = 0;
+            if (*it == 0)
+                length = readnet<std::uint16_t>(it);
+            else
+            {
+                length = *it;
+                std::advance(it, 1);
+            }
+            std::copy_n(it, length, std::back_inserter(exponent));
+            std::advance(it, length);
+            std::copy(it, _rd_data.end(), std::back_inserter(modulus));
             break;
         }
         default:

@@ -1,9 +1,11 @@
 #ifndef HAREDNS_SEC_HPP_
 #define HAREDNS_SEC_HPP_
 
+// OpenSSL/1.1.1c@conan/stable
 #include <openssl/evp.h>
 #include <openssl/rsa.h>
 #include <openssl/bn.h>
+
 #include "haredns_def.hpp"
 
 bool verify(std::vector<std::uint8_t> &n, std::vector<std::uint8_t> &e,
@@ -24,12 +26,13 @@ bool verify(std::vector<std::uint8_t> &n, std::vector<std::uint8_t> &e,
     EVP_PKEY_CTX *ctx = EVP_PKEY_CTX_new(pk, nullptr);
     defer _run_3 = [ctx]{ EVP_PKEY_CTX_free(ctx); };
 
-    EVP_MD_CTX verify;
-    EVP_MD_CTX_init(&verify);
+    EVP_MD_CTX* verify = EVP_MD_CTX_new();
+    defer _run_4 = [ctx]{ EVP_MD_CTX_free(verify); };
+    EVP_MD_CTX_init(verify);
 
-    EVP_DigestVerifyInit(&verify, nullptr, EVP_sha256(), nullptr, pk);
-    EVP_DigestVerifyUpdate(&verify, msg.data(), msg.size());
-    return EVP_DigestVerifyFinal(&verify, hash.data(), hash.size());
+    EVP_DigestVerifyInit(verify, nullptr, EVP_sha256(), nullptr, pk);
+    EVP_DigestVerifyUpdate(verify, msg.data(), msg.size());
+    return EVP_DigestVerifyFinal(verify, hash.data(), hash.size());
 }
 
 
