@@ -1,9 +1,12 @@
+import os
 import sys
-import dns.query
-import dns.message
 import ipaddress
 import time
 import enum
+import dns.query
+import dns.message
+import sched
+import threading
 
 root_dns = ["198.41.0.4", "199.9.14.201", "192.33.4.12", "199.7.91.13", "192.203.230.10", "192.5.5.241", "192.112.36.4" "198.97.190.53", "192.36.148.17", "192.58.128.30", "193.0.14.129", "199.7.83.42", "202.12.27.33"]
 
@@ -88,6 +91,10 @@ class error_type(enum.Enum):
     verify_fail = 3
     unknown_error = 4
 
+def cout(*argument, **kwargs):
+    print("DNSSEC Verification failed")
+    os._exit(1)
+
 class resolver:
     def __init__(self):
         self._dns_cache = []
@@ -161,10 +168,15 @@ class resolver:
                 print(e)
 
 if __name__ == "__main__":
-    start = time.time()
+    scheduler = sched.scheduler(time.time, time.sleep)
+    t = threading.Thread(target=scheduler.run)
     resolver = resolver()
+    timeout_event = scheduler.enter(12, 1, cout)
+    t.start()
+    start = time.time()
     response, err = resolver.recursive_resolve_root(sys.argv[1], sys.argv[2])
     elapsed = time.time() - start
+    scheduler.cancel(timeout_event)
     if err == error_type.no_error:
         for i in response.question:
             print("[[qury]]", i.to_text())
@@ -178,5 +190,6 @@ if __name__ == "__main__":
     elif err == error_type.no_dnssec:
         print("DNSSEC not supported")
     elif err == error_type.verify_fail:
-        print("DNSSec Verification failed")
+        print("DNSSEC Verification failed")
     print("Query time:", elapsed * 1000, "ms")
+    t.join()
