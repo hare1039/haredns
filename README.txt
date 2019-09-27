@@ -1,6 +1,8 @@
 [External libraries]
 For part A, no external libraries.
+    main file: mydig.cpp
 For part B, dnspython
+    main file: mydig_sec.py
 
 [how to run]
 For part A,
