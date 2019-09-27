@@ -1,0 +1,136 @@
+[Setup]
+I use shell script to do queries.
+```
+l=(Google.com Youtube.com Tmall.com Baidu.com Qq.com Sohu.com Facebook.com Taobao.com Login.tmall.com Wikipedia.org Yahoo.com 360.cn Jd.com Amazon.com Sina.com.cn Weibo.com Live.com Pages.tmall.com Reddit.com Vk.com Netflix.com Blogspot.com Alipay.com Office.com Okezone.com)
+for i in ${l[@]}; do
+    sum=0
+    for j in {1..10}; do
+        sum=$(( $(./mydig $i A | grep Query | awk '{print $3}') + $sum ))
+    done;
+    echo "$i: $(( sum / 10 ))"
+done
+```
+The local dns I use is bind 9 dns server.
+
+[Raw Data]
+Experiment 1: @mydig
+    (host):(ms)
+    Google.com: 282
+    Youtube.com: 263
+    Tmall.com: 408
+    Baidu.com: 328
+    Qq.com: 348
+    Sohu.com: 340
+    Facebook.com: 283
+    Taobao.com: 415
+    Login.tmall.com: 851
+    Wikipedia.org: 406
+    Yahoo.com: 404
+    360.cn: 3252
+    Jd.com: 340
+    Amazon.com: 798
+    Sina.com.cn: 2891
+    Weibo.com: 3165
+    Live.com: 529
+    Pages.tmall.com: 1135
+    Reddit.com: 741
+    Vk.com: 1418
+    Netflix.com: 289
+    Blogspot.com: 279
+    Alipay.com: 321
+    Office.com: 566
+    Okezone.com: 313
+
+Experiment 2: @local
+    (host):(ms)
+    Google.com: 1
+    Youtube.com: 1
+    Tmall.com: 1
+    Baidu.com: 1
+    Qq.com: 1
+    Sohu.com: 1
+    Facebook.com: 1
+    Taobao.com: 1
+    Login.tmall.com: 1
+    Wikipedia.org: 1
+    Yahoo.com: 1
+    360.cn: 1
+    Jd.com: 1
+    Amazon.com: 1
+    Sina.com.cn: 1
+    Weibo.com: 1
+    Live.com: 1
+    Pages.tmall.com: 1
+    Reddit.com: 1
+    Vk.com: 1
+    Netflix.com: 1
+    Blogspot.com: 1
+    Alipay.com: 1
+    Office.com: 1
+    Okezone.com: 1
+
+Experiment 3: @8.8.8.8
+    (host):(ms)
+    Google.com: 7
+    Youtube.com: 6
+    Tmall.com: 5
+    Baidu.com: 5
+    Qq.com: 5
+    Sohu.com: 5
+    Facebook.com: 5
+    Taobao.com: 4
+    Login.tmall.com: 5
+    Wikipedia.org: 4
+    Yahoo.com: 4
+    360.cn: 3
+    Jd.com: 5
+    Amazon.com: 4
+    Sina.com.cn: 3
+    Weibo.com: 4
+    Live.com: 3
+    Pages.tmall.com: 3
+    Reddit.com: 4
+    Vk.com: 3
+    Netflix.com: 3
+    Blogspot.com: 3
+    Alipay.com: 3
+    Office.com: 3
+    Okezone.com: 3
+
+[explain]
+The local dns out performed all other resolvers. I think the main reason is that bind 9
+did some caching on server side. So, when I query google.com, it will remember the result,
+and return it back. If it didn't do any caching, I think the performance will similar to
+mydig. For testing without dns caching, I redo the local dns query directly from `dig +trace`.
+And the result are shown below.
+
+Experiment 4@local dig, no cache
+    (ms) (host)
+    333 Google.com
+    403 Youtube.com
+    419 Tmall.com
+    434 Baidu.com
+    2464 Qq.com
+    310 Sohu.com
+    340 Facebook.com
+    390 Taobao.com
+    475 Login.tmall.com
+    428 Wikipedia.org
+    432 Yahoo.com
+    1024 360.cn
+    431 Jd.com
+    336 Amazon.com
+    826 Sina.com.cn
+    385 Weibo.com
+    455 Live.com
+    466 Pages.tmall.com
+    387 Reddit.com
+    789 Vk.com
+    473 Netflix.com
+    397 Blogspot.com
+    357 Alipay.com
+    380 Office.com
+    579 Okezone.com
+
+You can see the result are similar to mydig.
+So the conclusion is caching make dns resolvers more efficient.

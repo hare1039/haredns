@@ -1,0 +1,94 @@
+[DNSSEC]
+
+You can know how complex DNSSEC is when you tring to read all the RFCs,
+and try to implement all functionality without using any library is a
+big challange. For example, extraction of Name Compression and EDNS(0)
+were some hard problems I encountered.
+I tried to verify the DNSKEY, RRSIG, and DS using OpenSSL in plain c++,
+but it was impossible for me to write the whole query process in 3 days.
+There are too many verification methods to wrote. Therefore I switched
+to dnspython library.
+
+For anything that may went wrong, this program tries its best to verify
+zones, but it will giveup when 10 second passed.
+
+
+[Program logic]
+Verify: *verisigninc.com*
+
+Root server:
+    sends:
+         RRSET of DNSKEY records for root's PubZSK, PubKSK
+         RRSIG of above records
+         DS records of "com."
+         RRSIG of above records
+    Verify:
+        records:
+            RRSET of DNSKEY <=> RRSIG * PubKSK
+            DS records of "com." <=> RRSIG * PubKSK
+        zone:
+            verify by local trusted copy PubKSK
+
+"com." server:
+    sends:
+         RRSET of DNSKEY records for "com." PubZSK, PubKSK
+         RRSIG of above records
+         DS records of "verisigninc.com."
+         RRSIG of above records
+    Verify:
+        records:
+            ("com." RRSET) of DNSKEY <=> RRSIG * PubKSK
+            DS records of "com." <=> RRSIG * ("com." PubZSK)
+        zone:
+            verify by hash("com." PubKSK) == DS records from root
+
+"verisigninc.com." server:
+    sends:
+         RRSET of DNSKEY records for "verisigninc.com." PubZSK, PubKSK
+         RRSIG of above records
+         A records of "verisigninc.com."
+         RRSIG of above records
+    Verify:
+     records:
+            "verisigninc.com." RRSET of DNSKEY <=> RRSIG * PubKSK
+            A records of "verisigninc.com." <=> RRSIG * "verisigninc.com." PubZSK
+        zone:
+            verify by hash("verisigninc.com." PubKSK) == DS records from "com."
+
+
+[example]
+
+input:  python3 mydig_sec.py verisigninc.com A
+output:
+. DNSKEY verified
+com. DS verified
+Root verified
+com. DNSKEY verified
+verisigninc.com. DS verified
+com. verified
+verisigninc.com. DNSKEY verified
+verisigninc.com. DS verified
+verisigninc.com. verified
+[[qury]] verisigninc.com. IN A
+[[ansr]] verisigninc.com. 3600 IN A 72.13.63.55
+[[ansr]] verisigninc.com. 3600 IN RRSIG A 8 2 3600 20191010185820 20190926185820 30234 verisigninc.com. Bl0iyFHdzYFrdXMN77b4N2Vq949sRens hF0VqEs8d6KznYRtK2lqc59eD/pL3WYg Ek/FkrLL5sh44jDSu17a0kJfC75bO6Br z9EjbtE4I85rrGCItBEeJJaT4F8XiYGk x/2v+gRlVVNP0agC+HpoolmLcCo9YL+j b8FuUYE5Bv8=
+Query time: 786.6709232330322 ms
+
+---
+
+input:  python3 mydig_sec.py ip.hare1039.nctu.me A
+output:
+. DNSKEY verified
+me. DS verified
+Root verified
+DNSSEC not supported
+Query time: 373.5032081604004 ms
+
+---
+
+input:  python3 mydig_sec.py www.dnssec-failed.org A
+output:
+. DNSKEY verified
+org. DS verified
+Root verified
+DNSSEC Verification failed

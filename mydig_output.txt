@@ -1,0 +1,46 @@
+input: ./mydig www.cnn.com A
+output:
+[[qury]] www.cnn.com    A
+[[ansr]] www.cnn.com.   5   300 turner-tls.map.fastly.net.
+[[ansr]] turner-tls.map.fastly.net. 1   30  151.101.77.67
+Query time: 738 ms
+Now:  Fri Sep 27 06:16:57 2019 CST
+Size: 212 bytes
+
+---
+
+input: ./mydig ip.hare1039.nctu.me CNAME
+output:
+[[qury]] ip.hare1039.nctu.me    CNAME
+[[ansr]] ip.hare1039.nctu.me.   5   3600    hare1039.nctu.me.
+[[auth]] nctu.me.   6   300 ns1.dnsimple.com. admin.dnsimple.com. 1438185606 86400 7200 604800 300
+Query time: 909 ms
+Now:  Fri Sep 27 06:18:09 2019 CST
+Size: 62 bytes
+
+---
+
+input: ./mydig google.com MX
+output:
+[[qury]] google.com MX
+[[ansr]] google.com.    15  600 40  alt3.aspmx.l.google.com.
+[[ansr]] google.com.    15  600 20  alt1.aspmx.l.google.com.
+[[ansr]] google.com.    15  600 10  aspmx.l.google.com.
+[[ansr]] google.com.    15  600 50  alt4.aspmx.l.google.com.
+[[ansr]] google.com.    15  600 30  alt2.aspmx.l.google.com.
+Query time: 296 ms
+Now:  Fri Sep 27 06:19:21 2019 CST
+Size: 367 bytes
+
+---
+
+input: ./mydig cs.nctu.edu.tw NS
+output:
+[[qury]] cs.nctu.edu.tw NS
+[[ansr]] cs.nctu.edu.tw.    2   3135    dns.cs.nctu.edu.tw.
+[[ansr]] cs.nctu.edu.tw.    2   3135    dns2.cs.nctu.edu.tw.
+[[ansr]] cs.nctu.edu.tw.    2   3135    dns3.cs.nctu.edu.tw.
+[[ansr]] cs.nctu.edu.tw.    46  3265    2 7 00000100 3600 1572094076 1569502076 24245 cs.nctu.edu.tw. size: 128
+Query time: 239 ms
+Now:  Fri Sep 27 06:19:49 2019 CST
+Size: 843 bytes
