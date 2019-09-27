@@ -9,19 +9,6 @@ import sched
 import threading
 
 root_dns = ["198.41.0.4", "199.9.14.201", "192.33.4.12", "199.7.91.13", "192.203.230.10", "192.5.5.241", "192.112.36.4" "198.97.190.53", "192.36.148.17", "192.58.128.30", "193.0.14.129", "199.7.83.42", "202.12.27.33"]
-
-def has_ip(response, query):
-    try:
-        if query == "A":
-            ipaddress.ip_address(response.answer[0].items[0].to_text())
-            return True
-        elif query == "NS":
-            return response.answer[0].query == 2
-        elif query == "MX":
-            return response.answer[0].query == 15
-    except Exception: pass
-    return False
-
 root_ksk = dns.rrset.from_text(".", 1, "IN", "DNSKEY", "257 3 8 AwEAAaz/tAm8yTn4Mfeh5eyI96WSVexTBAvkMgJzkKTOiW1vkIbzxeF3+/4RgWOq7HrxRixHlFlExOLAJr5emLvN7SWXgnLh4+B5xQlNVz8Og8kvArMtNROxVQuCaSnIDdD5LKyWbRd2n9WGe2R8PzgCmr3EgVLrjyBxWezF0jLHwVN8efS3rCj/EWgvIWgb9tarpVUDK/b58Da+sqqls3eNbuv7pr+eoZG+SrDK6nWeL3c6H5Apxz7LjVc1uTIdsIXxuOLYA4/ilBmSVIzuDWfdRUfhHdY6+cn8HFRm+2hM8AnXGXws9555KrUB5qihylGa8subX2Nn6UwNR1AkUTV74bU=").items[0].to_text()
 
 def parse(response, query):
@@ -39,6 +26,18 @@ def parse(response, query):
             k    = rr
             name = rr.name
     return k, rrsig, name
+
+def has_ip(res, query):
+    try:
+        if query == "A":
+            ipaddress.ip_address(res.answer[0].items[0].to_text())
+            return True
+        elif query == "NS":
+            return res.answer[0].query == 2
+        elif query == "MX":
+            return res.answer[0].query == 15
+    except Exception: pass
+    return False
 
 def dnskey_verify(response):
     dnskey, rrsig_key, name_key = parse(response, "DNSKEY")
@@ -64,9 +63,9 @@ def zone_verify(response, parent):
     verified, _, name = parse(parent, "DS")
     verified = verified.items[0]
 
-    for item in parse(response, "DNSKEY")[0]:
-        if item.flags == 257: # 1 on 7 and 15 bit
-            pubksk = item
+    for i in parse(response, "DNSKEY")[0]:
+        if i.flags == 257: # 1 on 7 and 15 bit
+            pubksk = i
             break
 
     ds = dns.dnssec.make_ds(name, pubksk, "SHA256" if verified.digest_type == 2 else "SHA1")
@@ -83,12 +82,11 @@ def easy_verify(res, res_type, res_key, upper=None):
     else:
         root_verify(dnskey)
 
-
 class error_type(enum.Enum):
-    no_answer   = 0
-    no_error    = 1
-    no_dnssec   = 2
-    verify_fail = 3
+    no_answer     = 0
+    no_error      = 1
+    not_supported = 2
+    failed        = 3
     unknown_error = 4
 
 def cout(*argument, **kwargs):
@@ -125,7 +123,7 @@ class resolver:
                             has_ds = True
 
                     if not has_ds:
-                        err = error_type.no_dnssec
+                        err = error_type.not_supported
                         return res, reskey, response, err
 
                     easy_verify(res, "DS", reskey, response)
@@ -148,7 +146,7 @@ class resolver:
                     continue
 
                 res, reskey, old_resv, err = self.loop_resolve(hostname, query, response, nextdnskey)
-                if err == error_type.no_dnssec:
+                if err == error_type.not_supported:
                     return res, err
 
                 if has_ip(res, query):
@@ -157,7 +155,7 @@ class resolver:
                         return res, err
                     except Exception as e:
                         print(e)
-                        return res, error_type.verify_fail
+                        return res, error_type.failed
                 else:
                     for rr in old_resv.answer:
                         name = rr.items[0].to_text()
@@ -171,7 +169,7 @@ if __name__ == "__main__":
     scheduler = sched.scheduler(time.time, time.sleep)
     t = threading.Thread(target=scheduler.run)
     resolver = resolver()
-    timeout_event = scheduler.enter(12, 1, cout)
+    timeout_event = scheduler.enter(10, 1, cout)
     t.start()
     start = time.time()
     response, err = resolver.recursive_resolve_root(sys.argv[1], sys.argv[2])
@@ -184,12 +182,9 @@ if __name__ == "__main__":
         for i in response.answer:
             print("[[ansr]]", i.to_text())
 
-        msg_size = str(len(response.to_text()))
-        print("MSG SIZE rcvd: ", msg_size, "\n")
-
-    elif err == error_type.no_dnssec:
+    elif err == error_type.not_supported:
         print("DNSSEC not supported")
-    elif err == error_type.verify_fail:
+    elif err == error_type.failed:
         print("DNSSEC Verification failed")
     print("Query time:", elapsed * 1000, "ms")
     t.join()
